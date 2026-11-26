@@ -1,0 +1,15 @@
+{
+  "name": "figma-publish-slack-notifier",
+  "version": "1.0.0",
+  "description": "Posts a Slack message when selected people publish a Figma library",
+  "type": "module",
+  "scripts": {
+    "start": "node --env-file=.env server.js",
+    "register": "node --env-file=.env scripts/register-webhook.js",
+    "test:local": "node --env-file=.env scripts/send-test-event.js",
+    "start:prod": "node server.js"
+  },
+  "engines": {
+    "node": ">=20.6"
+  }
+}

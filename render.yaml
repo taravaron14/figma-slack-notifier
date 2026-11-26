@@ -1,0 +1,24 @@
+services:
+  - type: web
+    name: figma-publish-slack-notifier
+    runtime: node
+    plan: free
+    buildCommand: "true"
+    startCommand: npm run start:prod
+    healthCheckPath: /health
+    envVars:
+      - key: NODE_VERSION
+        value: "22"
+      - key: WATCHED_FIGMA_USERS
+        value: "Tara Varon,Asaf Sarid"
+      - key: WATCHED_LIBRARY_NAMES
+        value: "Clay Foundations,Clay Platform,Clay Web,Clay LCM"
+      - key: WATCHED_FILE_KEYS
+        value: "PdpiXBCpJsoE4OIyMLw2oh,2KviByuBhCkuPDGACqxHEq,AQsUtvgIxfRwYdnazGFltD,gxMuHxBrQJ5sb4EDBW7IE8"
+      - key: SLACK_NOTIFY_USER_IDS
+        value: "U09JSRGSLDT"
+      # Secrets: set these in the Render dashboard (never commit them)
+      - key: SLACK_BOT_TOKEN
+        sync: false
+      - key: FIGMA_WEBHOOK_PASSCODE
+        sync: false
