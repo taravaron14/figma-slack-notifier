@@ -10,6 +10,8 @@ const {
   SLACK_WEBHOOK_URL,
   SLACK_BOT_TOKEN,
   SLACK_WORKFLOW_WEBHOOK_URL,
+  FIGMA_API_TOKEN,
+  FIGMA_API_BASE = 'https://api.figma.com',
   SLACK_NOTIFY_USER_IDS = '',
   SLACK_MENTION_USER_IDS = '',
 } = process.env;
@@ -78,8 +80,37 @@ function buildSlackMessage(e) {
   return { text: `${who} published ${e.file_name}`, blocks, flat };
 }
 
+const MAX_PREVIEWS = 4;
+
+// Looks up Figma's own thumbnail for each added/modified component (needs FIGMA_API_TOKEN with library_content:read).
+// Any failure just means "no image for that component"; the notification is still sent.
+async function fetchPreviews(e) {
+  if (!FIGMA_API_TOKEN) return [];
+  const comps = [...(e.created_components ?? []), ...(e.modified_components ?? [])].slice(0, MAX_PREVIEWS);
+  const results = await Promise.all(
+    comps.map(async (c) => {
+      try {
+        const r = await fetch(`${FIGMA_API_BASE}/v1/components/${encodeURIComponent(c.key)}`, {
+          headers: { 'X-Figma-Token': FIGMA_API_TOKEN },
+          signal: AbortSignal.timeout(8000),
+        });
+        if (!r.ok) {
+          console.log(`Preview lookup failed for "${c.name}": HTTP ${r.status}`);
+          return null;
+        }
+        const url = (await r.json())?.meta?.thumbnail_url;
+        return url ? { name: c.name, url } : null;
+      } catch (err) {
+        console.log(`Preview lookup error for "${c.name}": ${err.message}`);
+        return null;
+      }
+    }),
+  );
+  return results.filter(Boolean);
+}
+
 async function postToSlack(message) {
-  const { flat, ...slackMessage } = message;
+  const { flat, fallbackBlocks, ...slackMessage } = message;
   message = slackMessage;
   // Option B: Slack Workflow Builder webhook (no app approval needed). Variables: who, library, url, summary, notes, details.
   if (SLACK_WORKFLOW_WEBHOOK_URL) {
@@ -90,12 +121,19 @@ async function postToSlack(message) {
   // Preferred: DM each recipient via a bot token (chat.postMessage with a user ID opens a DM).
   if (SLACK_BOT_TOKEN && dmTargets.length) {
     for (const channel of dmTargets) {
-      const res = await fetch('https://slack.com/api/chat.postMessage', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json; charset=utf-8', Authorization: `Bearer ${SLACK_BOT_TOKEN}` },
-        body: JSON.stringify({ channel, ...message }),
-      });
-      const data = await res.json();
+      const send = async (payload) => {
+        const res = await fetch('https://slack.com/api/chat.postMessage', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json; charset=utf-8', Authorization: `Bearer ${SLACK_BOT_TOKEN}` },
+          body: JSON.stringify({ channel, ...payload }),
+        });
+        return res.json();
+      };
+      let data = await send(message);
+      if (!data.ok && fallbackBlocks) {
+        console.log(`Slack rejected the message with images (${data.error}); retrying without images`);
+        data = await send({ ...message, blocks: fallbackBlocks });
+      }
       if (!data.ok) throw new Error(`Slack chat.postMessage to ${channel} failed: ${data.error}`);
     }
     return;
@@ -132,7 +170,20 @@ async function handleEvent(e) {
   if (!isWatched(e.triggered_by)) {
     return console.log(`Skipping publish by ${e.triggered_by?.handle} (not on watch list)`);
   }
-  await postToSlack(buildSlackMessage(e));
+  const message = buildSlackMessage(e);
+  const previews = await fetchPreviews(e);
+  if (previews.length) {
+    message.fallbackBlocks = message.blocks;
+    const images = previews.map((p) => ({
+      type: 'image',
+      title: { type: 'plain_text', text: p.name.slice(0, 150) },
+      image_url: p.url,
+      alt_text: p.name.slice(0, 500),
+    }));
+    // keep the "Open in Figma" button last
+    message.blocks = [...message.blocks.slice(0, -1), ...images, message.blocks[message.blocks.length - 1]];
+  }
+  await postToSlack(message);
   console.log(`Notified: ${e.triggered_by?.handle} published ${e.file_name}`);
 }
 
